@@ -1,6 +1,6 @@
-FROM ghcr.io/ggml-org/llama.cpp:server-cuda13 AS llama
+FROM ghcr.io/ggml-org/llama.cpp:server-cuda AS llama
 
-FROM ghcr.io/open-webui/open-webui:main
+FROM ghcr.io/open-webui/open-webui:main-cuda
 
 USER root
 
