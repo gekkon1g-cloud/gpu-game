@@ -9,7 +9,7 @@ ENV ENABLE_OLLAMA_API=false
 ENV OPENAI_API_BASE_URL=http://127.0.0.1:10000/v1
 ENV OPENAI_API_KEY=gpu-game-local
 ENV WEBUI_AUTH=true
-ENV UVICORN_WORKERS=1
+ENV WORKERS=1
 ENV LD_LIBRARY_PATH=/app
 
 RUN apt-get update && \
@@ -19,6 +19,7 @@ RUN apt-get update && \
         curl \
         wget \
         supervisor \
+        gettext-base \
         python3 \
         python3-venv \
         python3-pip && \
