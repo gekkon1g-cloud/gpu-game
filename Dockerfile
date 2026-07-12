@@ -14,12 +14,14 @@ ENV WORKERS=1
 # llama.cpp
 ENV LD_LIBRARY_PATH=/app
 
-# Версии, которые уже были проверены в проекте
 ARG OPEN_WEBUI_VERSION=0.10.2
 ARG COMFYUI_VERSION=v0.27.0
 ARG CLOUDFLARED_VERSION=2026.7.1
 
+# ============================================================
 # Системные зависимости
+# ============================================================
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         bash \
@@ -46,20 +48,26 @@ RUN apt-get update && \
         apt-transport-https && \
     rm -rf /var/lib/apt/lists/*
 
-# -------------------------------------------------------------------
-# uv и отдельные Python-окружения
-# -------------------------------------------------------------------
+# ============================================================
+# uv
+# ============================================================
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Open WebUI — отдельный Python 3.11
+# ============================================================
+# Open WebUI — отдельное окружение Python 3.11
+# ============================================================
+
 RUN uv python install 3.11 && \
     uv venv --python 3.11 /opt/open-webui/venv && \
     uv pip install \
         --python /opt/open-webui/venv/bin/python \
         "open-webui==${OPEN_WEBUI_VERSION}"
 
-# ComfyUI — отдельный Python 3.12
+# ============================================================
+# ComfyUI — отдельное окружение Python 3.12
+# ============================================================
+
 RUN uv python install 3.12 && \
     git clone \
         --branch "${COMFYUI_VERSION}" \
@@ -68,8 +76,7 @@ RUN uv python install 3.12 && \
         /opt/ComfyUI && \
     uv venv --python 3.12 /opt/ComfyUI/venv
 
-# PyTorch, torchvision и torchaudio из одного CUDA-репозитория.
-# Это исключает конфликт CUDA-версий между torch и torchaudio.
+# PyTorch, torchvision и torchaudio из одного CUDA-репозитория
 RUN uv pip install \
         --python /opt/ComfyUI/venv/bin/python \
         torch \
@@ -80,31 +87,31 @@ RUN uv pip install \
         --python /opt/ComfyUI/venv/bin/python \
         -r /opt/ComfyUI/requirements.txt
 
-# -------------------------------------------------------------------
+# ============================================================
 # Caddy
-# -------------------------------------------------------------------
+# ============================================================
 
 RUN curl -1sLf \
-        'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+        https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
         -o /usr/share/keyrings/caddy-stable-archive-keyring.asc && \
     curl -1sLf \
-        'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+        https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
         -o /etc/apt/sources.list.d/caddy-stable.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends caddy && \
     rm -rf /var/lib/apt/lists/*
 
-# -------------------------------------------------------------------
-# Cloudflare Quick Tunnel — резервный вариант доступа
-# -------------------------------------------------------------------
+# ============================================================
+# Cloudflare Quick Tunnel — резервный вариант
+# ============================================================
 
 RUN wget -O /usr/local/bin/cloudflared \
         "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" && \
     chmod +x /usr/local/bin/cloudflared
 
-# -------------------------------------------------------------------
+# ============================================================
 # Каталоги проекта и моделей
-# -------------------------------------------------------------------
+# ============================================================
 
 RUN mkdir -p \
         /opt/gpu-game \
@@ -125,7 +132,10 @@ RUN mkdir -p \
         /opt/ComfyUI/models/clip_vision \
         /opt/ComfyUI/models/ipadapter
 
-# Файлы управления будут добавлены следующими шагами
+# ============================================================
+# Файлы проекта
+# ============================================================
+
 COPY start.sh /opt/gpu-game/start.sh
 COPY supervisord.conf /etc/supervisor/conf.d/gpu-game.conf
 COPY Caddyfile.template /opt/gpu-game/Caddyfile.template
@@ -134,10 +144,25 @@ RUN chmod +x /opt/gpu-game/start.sh && \
     touch /opt/gpu-game/.webui_secret_key && \
     chmod 600 /opt/gpu-game/.webui_secret_key
 
-# Порты внутри контейнера.
-# Наружу фактически планируем использовать 80/443 через Caddy.
+# ============================================================
+# Короткие команды управления
+# ============================================================
+
+RUN ln -sf /opt/gpu-game/start.sh /usr/local/bin/gpu-start && \
+    ln -sf /opt/gpu-game/start.sh /usr/local/bin/gpu-stop && \
+    ln -sf /opt/gpu-game/start.sh /usr/local/bin/gpu-status && \
+    ln -sf /opt/gpu-game/start.sh /usr/local/bin/gpu-logs && \
+    ln -sf /opt/gpu-game/start.sh /usr/local/bin/gpu-links && \
+    ln -sf /opt/gpu-game/start.sh /usr/local/bin/gpu-test-llm
+
+# ============================================================
+# Порты контейнера
+# ============================================================
+
 EXPOSE 80 443 3000 8188 10000 10001 10100
 
 WORKDIR /opt/gpu-game
 
+# Автоматический запуск платформой не предполагается.
+# Без аргументов скрипт показывает справку и завершается.
 ENTRYPOINT ["/opt/gpu-game/start.sh"]
