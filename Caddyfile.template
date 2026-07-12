@@ -1,0 +1,8 @@
+{
+	admin off
+	persist_config off
+}
+
+${CHAT_BLOCK}
+
+${COMFY_BLOCK}
