@@ -60,6 +60,10 @@ RUN uv python install 3.11 && \
 
 # ============================================================
 # ComfyUI
+#
+# Используется сборка PyTorch CUDA 12.6.
+# Она совместима с современными RTX и поддерживает Tesla V100
+# с Compute Capability 7.0.
 # ============================================================
 
 RUN uv python install 3.12 && \
@@ -75,7 +79,7 @@ RUN uv pip install \
         torch \
         torchvision \
         torchaudio \
-        --index-url https://download.pytorch.org/whl/cu130 && \
+        --index-url https://download.pytorch.org/whl/cu126 && \
     uv pip install \
         --python /opt/ComfyUI/venv/bin/python \
         -r /opt/ComfyUI/requirements.txt
@@ -89,7 +93,7 @@ RUN wget -O /tmp/caddy.tar.gz \
     tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy && \
     chmod +x /usr/local/bin/caddy && \
     rm -f /tmp/caddy.tar.gz && \
-    caddy version
+    /usr/local/bin/caddy version
 
 # ============================================================
 # Cloudflare Quick Tunnel — резервный вариант
@@ -98,7 +102,7 @@ RUN wget -O /tmp/caddy.tar.gz \
 RUN wget -O /usr/local/bin/cloudflared \
         "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" && \
     chmod +x /usr/local/bin/cloudflared && \
-    cloudflared --version
+    /usr/local/bin/cloudflared --version
 
 # ============================================================
 # Каталоги
