@@ -3,14 +3,17 @@ set -Eeuo pipefail
 
 PROJECT_DIR="/opt/gpu-game"
 DATA_DIR="/data/gpu-game"
+
 MODELS_DIR="/models"
 LLM_DIR="$MODELS_DIR/llm"
 VISION_DIR="$MODELS_DIR/vision"
 TEST_DIR="$MODELS_DIR/test"
+
 COMFY_CHECKPOINT_DIR="/opt/ComfyUI/models/checkpoints"
 
 ACTIVE_SUPERVISOR_CONF="/tmp/gpu-game.supervisord.conf"
 ACTIVE_CADDYFILE="/tmp/gpu-game.Caddyfile"
+
 RUNTIME_ENV="$DATA_DIR/runtime.env"
 LINKS_FILE="$DATA_DIR/links.txt"
 PASSWORD_FILE="$DATA_DIR/comfy-password.txt"
@@ -20,16 +23,9 @@ SUPERVISOR_TEMPLATE="/etc/supervisor/conf.d/gpu-game.conf"
 CADDY_TEMPLATE="$PROJECT_DIR/Caddyfile.template"
 
 ROCINANTE_FILE="$LLM_DIR/Rocinante-12B-v2i-Q4_K_M.gguf"
-ROCINANTE_URL="https://huggingface.co/TheDrummer/UnslopNemo-12B-v4-GGUF/resolve/main/Rocinante-12B-v2i-Q4_K_M.gguf?download=true"
 
 VISION_FILE="$VISION_DIR/Qwen3-VL-8B-Heretic-Stable.Q4_K_M.gguf"
-VISION_URL="https://huggingface.co/prithivMLmods/Qwen3-VL-8B-Heretic-Stable-GGUF/resolve/main/Qwen3-VL-8B-Heretic-Stable.Q4_K_M.gguf?download=true"
-
 VISION_MMPROJ_FILE="$VISION_DIR/Qwen3-VL-8B-Heretic-Stable.mmproj-bf16.gguf"
-VISION_MMPROJ_URL="https://huggingface.co/prithivMLmods/Qwen3-VL-8B-Heretic-Stable-GGUF/resolve/main/Qwen3-VL-8B-Heretic-Stable.mmproj-bf16.gguf?download=true"
-
-COMFY_FILE="$COMFY_CHECKPOINT_DIR/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
-COMFY_URL="https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors?download=true"
 
 mkdir -p \
     "$DATA_DIR" \
@@ -43,45 +39,30 @@ log() {
     printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
 
+warn() {
+    printf 'Предупреждение: %s\n' "$*" >&2
+}
+
 die() {
     printf 'Ошибка: %s\n' "$*" >&2
     exit 1
 }
 
-download_file() {
-    local final_path="$1"
-    local url="$2"
-    local part_path="${final_path}.part"
+require_file() {
+    local file_path="$1"
+    local description="$2"
 
-    if [[ -s "$final_path" ]]; then
-        log "Файл уже существует: $final_path"
-        return 0
+    if [[ ! -s "$file_path" ]]; then
+        echo
+        echo "Не найден файл: $description"
+        echo "Ожидаемый путь:"
+        echo "  $file_path"
+        echo
+        echo "Модели в этом образе устанавливаются вручную."
+        echo "Сначала загрузи необходимый файл, затем повтори запуск."
+        echo
+        exit 1
     fi
-
-    mkdir -p "$(dirname "$final_path")"
-
-    log "Загрузка: $(basename "$final_path")"
-    log "Прерванная загрузка будет продолжена автоматически."
-
-    while true; do
-        if wget \
-            -c \
-            --retry-connrefused \
-            --waitretry=20 \
-            --read-timeout=90 \
-            --timeout=90 \
-            --tries=0 \
-            -O "$part_path" \
-            "$url"; then
-
-            mv "$part_path" "$final_path"
-            log "Загрузка завершена: $final_path"
-            return 0
-        fi
-
-        log "Ошибка сети. Новая попытка через 30 секунд."
-        sleep 30
-    done
 }
 
 detect_public_ip() {
@@ -112,12 +93,18 @@ make_webui_secret() {
 
 make_comfy_password() {
     if [[ ! -s "$PASSWORD_FILE" ]]; then
-        openssl rand -base64 18 | tr -d '/+=' | cut -c1-20 > "$PASSWORD_FILE"
+        openssl rand -base64 18 |
+            tr -d '/+=' |
+            cut -c1-20 > "$PASSWORD_FILE"
+
         chmod 600 "$PASSWORD_FILE"
     fi
 
     COMFY_PASSWORD="$(cat "$PASSWORD_FILE")"
-    COMFY_PASSWORD_HASH="$(caddy hash-password --plaintext "$COMFY_PASSWORD")"
+    COMFY_PASSWORD_HASH="$(
+        /usr/local/bin/caddy hash-password \
+            --plaintext "$COMFY_PASSWORD"
+    )"
 
     export COMFY_PASSWORD
     export COMFY_PASSWORD_HASH
@@ -126,10 +113,15 @@ make_comfy_password() {
 stop_existing() {
     if [[ -f /var/run/gpu-game-supervisord.pid ]]; then
         local pid
-        pid="$(cat /var/run/gpu-game-supervisord.pid 2>/dev/null || true)"
+
+        pid="$(
+            cat /var/run/gpu-game-supervisord.pid \
+                2>/dev/null || true
+        )"
 
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             log "Остановка предыдущего режима..."
+
             kill "$pid" 2>/dev/null || true
 
             for _ in $(seq 1 30); do
@@ -141,16 +133,68 @@ stop_existing() {
         fi
     fi
 
-    pkill -f "/app/llama-server.*--port 10000" 2>/dev/null || true
-    pkill -f "/app/llama-server.*--port 10001" 2>/dev/null || true
-    pkill -f "/app/llama-server.*--port 10100" 2>/dev/null || true
-    pkill -f "/opt/ComfyUI/venv/bin/python.*main.py" 2>/dev/null || true
-    pkill -f "/opt/open-webui/venv/bin/open-webui" 2>/dev/null || true
-    pkill -f "caddy run --config $ACTIVE_CADDYFILE" 2>/dev/null || true
+    pkill -f "/app/llama-server.*--port 10000" \
+        2>/dev/null || true
+
+    pkill -f "/app/llama-server.*--port 10001" \
+        2>/dev/null || true
+
+    pkill -f "/app/llama-server.*--port 10100" \
+        2>/dev/null || true
+
+    pkill -f "/opt/ComfyUI/venv/bin/python.*main.py" \
+        2>/dev/null || true
+
+    pkill -f "/opt/open-webui/venv/bin/open-webui" \
+        2>/dev/null || true
+
+    pkill -f "caddy run --config $ACTIVE_CADDYFILE" \
+        2>/dev/null || true
 
     rm -f \
         /var/run/gpu-game-supervisord.pid \
         /var/run/gpu-game-supervisor.sock
+}
+
+check_mode_files() {
+    local mode="$1"
+
+    case "$mode" in
+        webui|all)
+            require_file \
+                "$ROCINANTE_FILE" \
+                "основная модель Rocinante"
+
+            require_file \
+                "$VISION_FILE" \
+                "мультимодальная модель Qwen3-VL"
+
+            require_file \
+                "$VISION_MMPROJ_FILE" \
+                "проектор mmproj модели Qwen3-VL"
+            ;;
+
+        comfy)
+            if ! find "$COMFY_CHECKPOINT_DIR" \
+                -maxdepth 1 \
+                -type f \
+                \( -iname '*.safetensors' -o -iname '*.ckpt' \) \
+                -print -quit |
+                grep -q .; then
+
+                warn "В каталоге ComfyUI пока нет checkpoint-моделей."
+                warn "ComfyUI запустится, но генерация будет недоступна до ручной загрузки модели."
+                warn "Каталог: $COMFY_CHECKPOINT_DIR"
+            fi
+            ;;
+
+        test)
+            ;;
+
+        *)
+            die "Неизвестный режим: $mode"
+            ;;
+    esac
 }
 
 build_caddy_config() {
@@ -205,11 +249,14 @@ build_caddy_config() {
     export CHAT_BLOCK
     export COMFY_BLOCK
 
-    envsubst '${CHAT_BLOCK} ${COMFY_BLOCK}' \
+    envsubst \
+        '${CHAT_BLOCK} ${COMFY_BLOCK}' \
         < "$CADDY_TEMPLATE" \
         > "$ACTIVE_CADDYFILE"
 
-    caddy validate --config "$ACTIVE_CADDYFILE" --adapter caddyfile
+    /usr/local/bin/caddy validate \
+        --config "$ACTIVE_CADDYFILE" \
+        --adapter caddyfile
 }
 
 prepare_mode() {
@@ -223,27 +270,16 @@ prepare_mode() {
 
     case "$mode" in
         webui)
-            download_file "$ROCINANTE_FILE" "$ROCINANTE_URL"
-            download_file "$VISION_FILE" "$VISION_URL"
-            download_file "$VISION_MMPROJ_FILE" "$VISION_MMPROJ_URL"
-
             START_ROCINANTE="true"
             START_VISION="true"
             START_WEBUI="true"
             ;;
 
         comfy)
-            download_file "$COMFY_FILE" "$COMFY_URL"
-
             START_COMFY="true"
             ;;
 
         all)
-            download_file "$ROCINANTE_FILE" "$ROCINANTE_URL"
-            download_file "$VISION_FILE" "$VISION_URL"
-            download_file "$VISION_MMPROJ_FILE" "$VISION_MMPROJ_URL"
-            download_file "$COMFY_FILE" "$COMFY_URL"
-
             START_ROCINANTE="true"
             START_VISION="true"
             START_WEBUI="true"
@@ -301,20 +337,47 @@ write_links() {
 
     case "$mode" in
         webui)
-            printf 'Open WebUI: https://%s\n' "$CHAT_HOST" >> "$LINKS_FILE"
+            printf \
+                'Open WebUI: https://%s\n' \
+                "$CHAT_HOST" \
+                >> "$LINKS_FILE"
             ;;
 
         comfy)
-            printf 'ComfyUI: https://%s\n' "$COMFY_HOST" >> "$LINKS_FILE"
-            printf 'Логин: alex\n' >> "$LINKS_FILE"
-            printf 'Пароль: %s\n' "$COMFY_PASSWORD" >> "$LINKS_FILE"
+            printf \
+                'ComfyUI: https://%s\n' \
+                "$COMFY_HOST" \
+                >> "$LINKS_FILE"
+
+            printf \
+                'Логин: alex\n' \
+                >> "$LINKS_FILE"
+
+            printf \
+                'Пароль: %s\n' \
+                "$COMFY_PASSWORD" \
+                >> "$LINKS_FILE"
             ;;
 
         all|test)
-            printf 'Open WebUI: https://%s\n' "$CHAT_HOST" >> "$LINKS_FILE"
-            printf 'ComfyUI: https://%s\n' "$COMFY_HOST" >> "$LINKS_FILE"
-            printf 'Логин ComfyUI: alex\n' >> "$LINKS_FILE"
-            printf 'Пароль ComfyUI: %s\n' "$COMFY_PASSWORD" >> "$LINKS_FILE"
+            printf \
+                'Open WebUI: https://%s\n' \
+                "$CHAT_HOST" \
+                >> "$LINKS_FILE"
+
+            printf \
+                'ComfyUI: https://%s\n' \
+                "$COMFY_HOST" \
+                >> "$LINKS_FILE"
+
+            printf \
+                'Логин ComfyUI: alex\n' \
+                >> "$LINKS_FILE"
+
+            printf \
+                'Пароль ComfyUI: %s\n' \
+                "$COMFY_PASSWORD" \
+                >> "$LINKS_FILE"
             ;;
     esac
 }
@@ -328,7 +391,9 @@ start_services() {
     sleep 5
 
     gpu_status
+
     echo
+
     gpu_links
 }
 
@@ -359,6 +424,7 @@ gpu_start() {
     log "Режим: $mode"
     log "Публичный IP: $public_ip"
 
+    check_mode_files "$mode"
     prepare_mode "$mode"
     build_caddy_config "$mode" "$public_ip"
     build_supervisor_config
@@ -378,33 +444,54 @@ gpu_status() {
         return 1
     fi
 
+    if [[ -s "$RUNTIME_ENV" ]]; then
+        # shellcheck disable=SC1090
+        source "$RUNTIME_ENV"
+
+        echo "Режим: ${GPU_MODE:-неизвестно}"
+        echo
+    fi
+
     supervisorctl \
         -c "$ACTIVE_SUPERVISOR_CONF" \
         status || true
 
     echo
+    echo "Примечание:"
+    echo "Неактивные для выбранного режима службы могут отображаться как RUNNING,"
+    echo "поскольку внутри них выполняется только sleep infinity."
+    echo
+
     nvidia-smi \
         --query-gpu=name,memory.total,memory.used,utilization.gpu \
-        --format=csv,noheader 2>/dev/null || true
+        --format=csv,noheader \
+        2>/dev/null || true
 }
 
 gpu_logs() {
     local service="${1:-}"
 
     if [[ -n "$service" ]]; then
-        tail -f "/var/log/gpu-game/${service}.log"
+        local logfile="/var/log/gpu-game/${service}.log"
+
+        [[ -f "$logfile" ]] || \
+            die "Файл журнала не найден: $logfile"
+
+        tail -f "$logfile"
         return
     fi
 
     echo "Доступные логи:"
+
     find /var/log/gpu-game \
         -maxdepth 1 \
         -type f \
         -printf '  %f\n' \
-        2>/dev/null | sort
+        2>/dev/null |
+        sort
 
     echo
-    echo "Пример:"
+    echo "Примеры:"
     echo "  gpu-logs rocinante"
     echo "  gpu-logs vision"
     echo "  gpu-logs open-webui"
@@ -434,7 +521,8 @@ gpu_test_llm() {
         die "Сначала запусти режим test: gpu-start test"
     fi
 
-    pkill -f "/app/llama-server.*--port 10100" 2>/dev/null || true
+    pkill -f "/app/llama-server.*--port 10100" \
+        2>/dev/null || true
 
     local command=(
         /app/llama-server
@@ -470,40 +558,59 @@ show_help() {
     cat <<'EOF'
 GPU Game
 
+Модели устанавливаются вручную и не входят в Docker-образ.
+
 Основные команды:
 
   gpu-start webui [PUBLIC_IP]
       Rocinante + Qwen3-VL + Open WebUI + Caddy
 
+      Требуемые файлы:
+        /models/llm/Rocinante-12B-v2i-Q4_K_M.gguf
+        /models/vision/Qwen3-VL-8B-Heretic-Stable.Q4_K_M.gguf
+        /models/vision/Qwen3-VL-8B-Heretic-Stable.mmproj-bf16.gguf
+
   gpu-start comfy [PUBLIC_IP]
       ComfyUI + Caddy
+
+      Checkpoint-модели загружаются вручную в:
+        /opt/ComfyUI/models/checkpoints
 
   gpu-start all [PUBLIC_IP]
       Rocinante + Qwen3-VL + Open WebUI + ComfyUI + Caddy
 
   gpu-start test [PUBLIC_IP]
-      Open WebUI + ComfyUI + Caddy без автоматической загрузки LLM
+      Open WebUI + ComfyUI + Caddy без основных LLM
 
   gpu-stop
       Остановить все сервисы
 
   gpu-status
-      Показать состояние сервисов и видеокарты
+      Показать режим, состояние сервисов и видеокарты
 
   gpu-logs [service]
-      Показать доступные логи или следить за конкретным логом
+      Показать список журналов или следить за конкретным журналом
 
   gpu-links
       Показать HTTPS-ссылки и пароль ComfyUI
 
   gpu-test-llm MODEL [MMPROJ]
-      Запустить тестовую модель на порту 10100
+      Запустить тестовую GGUF-модель на порту 10100
 
 Примеры:
 
+  gpu-start comfy
+
+  gpu-start comfy 194.26.196.215
+
   gpu-start webui
+
   gpu-start all 194.228.55.129
-  gpu-logs rocinante
+
+  gpu-logs comfyui
+
+  gpu-logs caddy
+
   gpu-test-llm /models/test/model.gguf
 EOF
 }
