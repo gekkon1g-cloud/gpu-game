@@ -5,17 +5,15 @@ USER root
 ENV DEBIAN_FRONTEND=noninteractive
 ENV UV_UNMANAGED_INSTALL=/usr/local/bin
 
-# Open WebUI
 ENV DATA_DIR=/data/open-webui
 ENV ENABLE_OLLAMA_API=false
 ENV WEBUI_AUTH=true
 ENV WORKERS=1
-
-# llama.cpp
 ENV LD_LIBRARY_PATH=/app
 
 ARG OPEN_WEBUI_VERSION=0.10.2
 ARG COMFYUI_VERSION=v0.27.0
+ARG CADDY_VERSION=2.11.1
 ARG CLOUDFLARED_VERSION=2026.7.1
 
 # ============================================================
@@ -41,11 +39,7 @@ RUN apt-get update && \
         python3-pip \
         xz-utils \
         tar \
-        unzip \
-        gnupg \
-        debian-keyring \
-        debian-archive-keyring \
-        apt-transport-https && \
+        unzip && \
     rm -rf /var/lib/apt/lists/*
 
 # ============================================================
@@ -55,7 +49,7 @@ RUN apt-get update && \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # ============================================================
-# Open WebUI — отдельное окружение Python 3.11
+# Open WebUI
 # ============================================================
 
 RUN uv python install 3.11 && \
@@ -65,7 +59,7 @@ RUN uv python install 3.11 && \
         "open-webui==${OPEN_WEBUI_VERSION}"
 
 # ============================================================
-# ComfyUI — отдельное окружение Python 3.12
+# ComfyUI
 # ============================================================
 
 RUN uv python install 3.12 && \
@@ -76,7 +70,6 @@ RUN uv python install 3.12 && \
         /opt/ComfyUI && \
     uv venv --python 3.12 /opt/ComfyUI/venv
 
-# PyTorch, torchvision и torchaudio из одного CUDA-репозитория
 RUN uv pip install \
         --python /opt/ComfyUI/venv/bin/python \
         torch \
@@ -88,18 +81,15 @@ RUN uv pip install \
         -r /opt/ComfyUI/requirements.txt
 
 # ============================================================
-# Caddy
+# Caddy — официальный статический бинарник
 # ============================================================
 
-RUN curl -1sLf \
-        https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
-        -o /usr/share/keyrings/caddy-stable-archive-keyring.asc && \
-    curl -1sLf \
-        https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
-        -o /etc/apt/sources.list.d/caddy-stable.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends caddy && \
-    rm -rf /var/lib/apt/lists/*
+RUN wget -O /tmp/caddy.tar.gz \
+        "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz" && \
+    tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy && \
+    chmod +x /usr/local/bin/caddy && \
+    rm -f /tmp/caddy.tar.gz && \
+    caddy version
 
 # ============================================================
 # Cloudflare Quick Tunnel — резервный вариант
@@ -107,10 +97,11 @@ RUN curl -1sLf \
 
 RUN wget -O /usr/local/bin/cloudflared \
         "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64" && \
-    chmod +x /usr/local/bin/cloudflared
+    chmod +x /usr/local/bin/cloudflared && \
+    cloudflared --version
 
 # ============================================================
-# Каталоги проекта и моделей
+# Каталоги
 # ============================================================
 
 RUN mkdir -p \
@@ -145,7 +136,7 @@ RUN chmod +x /opt/gpu-game/start.sh && \
     chmod 600 /opt/gpu-game/.webui_secret_key
 
 # ============================================================
-# Короткие команды управления
+# Короткие команды
 # ============================================================
 
 RUN ln -sf /opt/gpu-game/start.sh /usr/local/bin/gpu-start && \
@@ -155,14 +146,8 @@ RUN ln -sf /opt/gpu-game/start.sh /usr/local/bin/gpu-start && \
     ln -sf /opt/gpu-game/start.sh /usr/local/bin/gpu-links && \
     ln -sf /opt/gpu-game/start.sh /usr/local/bin/gpu-test-llm
 
-# ============================================================
-# Порты контейнера
-# ============================================================
-
 EXPOSE 80 443 3000 8188 10000 10001 10100
 
 WORKDIR /opt/gpu-game
 
-# Автоматический запуск платформой не предполагается.
-# Без аргументов скрипт показывает справку и завершается.
 ENTRYPOINT ["/opt/gpu-game/start.sh"]
